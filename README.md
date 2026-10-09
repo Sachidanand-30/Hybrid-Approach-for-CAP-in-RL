@@ -162,6 +162,6 @@ $$
 
 2. **Run the Project**:
    ```bash
-   python monte_temporal_combination.py
+   python  cap_rl_blended_agent.py
    ```
    *Note on Execution logic*: The script will automatically check for the existence of `mountaincar_blended_agent_50k.pkl`. If found, it will bypass the 50,000-episode training loop and immediately load the model for visual evaluation. If no checkpoint is detected, it will commence the full training loop from scratch.
