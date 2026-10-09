@@ -1,207 +1,167 @@
 # Hybrid-Approach-for-CAP-in-RL
-A Hybrid Approach of Combining Temporal Difference and Monte Carlo Based Learning for Better Credit Assignment in MountainCar-v0  Environment
-# Blended TD-MC Q-Learning for MountainCar-v0
 
-## Overview
+## 1. PROJECT TITLE & CORE HYPOTHESIS
 
-This repository implements a **Blended Reinforcement Learning Agent** that combines **Temporal Difference (TD) Q-Learning** with **Monte Carlo (MC) Return Correction** to solve the `MountainCar-v0` environment.
+**Title**: Hybrid-Approach-for-CAP-in-RL (Credit Assignment Problem in Reinforcement Learning)
 
-### Core Hypothesis
-
-Standard 1-step TD learning provides rapid online updates but can suffer from severe bias and slow credit assignment propagation across long horizons in sparse reward environments. Every-episode Monte Carlo updates supply an unbiased, long-term reward signal. By blending step-wise TD updates with post-episode MC corrections, the agent gains fast convergence while preventing local optima entrapment.
+**Core Hypothesis**: 
+Pure 1-step Temporal Difference (TD) learning provides rapid online updates but suffers from slow credit assignment propagation in sparse-reward environments. Pure Monte Carlo (MC) updates provide unbiased full-episode return signals but have high variance. This project implements a **"Blended Agent"** that executes step-wise TD Q-learning during the episode AND applies post-episode MC return corrections to blend empirical averages back into the Q-table, significantly accelerating convergence and avoiding local optima.
 
 ---
 
-## 1. Environment & Dependencies
+## 2. ENVIRONMENT & LIBRARIES USED
 
-### Environment
+**Environment**: Gymnasium `MountainCar-v0`
+- **State Space**: Continuous 2D observation [position $x$, velocity $v$]
+  - Position ($x$): range `[-1.2, 0.6]`
+  - Velocity ($v$): range `[-0.07, 0.07]`
+- **Action Space**: Discrete set of 3 actions:
+  - `0`: Push Left
+  - `1`: No Push
+  - `2`: Push Right
+- **Reward Signal**: Base reward of `-1.0` per step until reaching the goal at $x \geq 0.5$.
 
-* **Environment Name:** `MountainCar-v0` (Gymnasium)
-* **Goal:** Drive an underpowered car up a steep hill to reach the goal post at position $x \ge 0.5$.
-* **State Space:** Continuous 2D vector $\mathbf{s} = [x, v]$
-* **Position ($x$):** $[-1.2, 0.6]$
-* **Velocity ($v$):** $[-0.07, 0.07]$
-
-
-* **Action Space:** Discrete 1D set of 3 actions:
-* `0`: Accelerate to the left
-* `1`: Don't accelerate
-* `2`: Accelerate to the right
-
-
-* **Base Reward:** $-1.0$ for every step until the goal state is reached.
-
-### Required Python Libraries
-
-* **`gymnasium`**: Simulation environment interface.
-* **`numpy`**: Fast matrix operations and multi-dimensional state table management.
-* **`tqdm`**: Progress tracking for training loops.
-* **`pickle`**: Model serialization and reward logging.
-* **`os`**: File system path verification.
-* **`collections.defaultdict`**: Dynamically tracking MC state-action return sums and visit counts.
+**Libraries & Modules Used**:
+- `gymnasium`: Environment simulation and state-action stepping.
+- `numpy`: State discretization (`np.linspace`, `np.digitize`) and 3D Q-table matrix representation.
+- `tqdm`: Visual progress bar for 50,000 training iterations.
+- `pickle`: Model serialization (`mountaincar_blended_agent_50k.pkl`) and reward log storage (`blended_rewards_50k.pkl`).
+- `os`: Checkpoint checking before training/loading.
+- `collections.defaultdict`: Dynamically tracking state-action return sums and visit counts for MC updates.
+- `time.sleep`: Delaying frames during visual evaluation.
 
 ---
 
-## 2. State Discretization & Action Space Structure
+## 3. DISCRETIZATION & STATE-ACTION STRUCTURE
 
-Because $Q$-Learning requires discrete tabular representations, the continuous 2D observation space is discretized into uniform bins.
+**Discretization Technique**:
+- **Position Bins ($x\_bin = 20$)**: Cutoffs generated via `np.linspace(-1.2, 0.6, 19)`.
+- **Velocity Bins ($vel\_bin = 20$)**: Cutoffs generated via `np.linspace(-0.07, 0.07, 19)`.
+- Index mapping is handled via `np.digitize(x, pos_bins)` and `np.digitize(v, vel_bins)`, yielding a discrete index tuple `(pos_idx, vel_idx)`.
 
-### Bin Configuration
-
-* **Position Bins ($x\_bin = 20$):** Divided into 19 threshold cutoffs generated via `np.linspace(-1.2, 0.6, 19)`.
-* **Velocity Bins ($vel\_bin = 20$):** Divided into 19 threshold cutoffs generated via `np.linspace(-0.07, 0.07, 19)`.
-
-### Discrete Mapping
-
-Using `np.digitize`, continuous continuous states $(x, v)$ map into discrete state indices $(s_x, s_v)$:
-
-$$s_x = \text{digitize}(x, \text{pos\_bins})$$
-
-$$s_v = \text{digitize}(v, \text{vel\_bins})$$
-
-where $s_x \in \{0, 1, \dots, 19\}$ and $s_v \in \{0, 1, \dots, 19\}$.
-
-### State-Action Q-Table
-
-The $Q$-table is stored as a 3D NumPy array of shape $(20, 20, 3)$, initialized to all zeros:
-
-$$\mathbf{Q} \in \mathbb{R}^{20 \times 20 \times 3}$$
-
-* Total Discrete States: $20 \times 20 = 400$
-* Total State-Action Pairs: $400 \times 3 = 1200$
+**Q-Table Dimensions**:
+- **Array Shape**: `(20, 20, 3)` initialized to zeros.
+- **Discrete States**: 20 $\times$ 20 = 400 state combinations.
+- **Total State-Action Values**: 400 $\times$ 3 = 1,200 trainable parameters.
 
 ---
 
-## 3. Mathematical Formulations & Techniques
+## 4. MATHEMATICAL FORMULATIONS
 
-### Exploration Strategy ($\epsilon$-Greedy Decay)
+### 1. Epsilon-Greedy Action Selection & Exponential Decay
+Action selection follows an $\epsilon$-greedy policy, where $\epsilon$ decays exponentially over 50,000 episodes from $\epsilon_0 = 1.0$ to $\epsilon_{\text{min}} = 0.01$.
 
-Actions are selected according to an $\epsilon$-greedy policy:
+$$
+\pi(s) = 
+\begin{cases} 
+\text{random action} & \text{with probability } \epsilon_t \\ 
+\arg\max_a Q(s, a) & \text{with probability } 1 - \epsilon_t 
+\end{cases}
+$$
 
-$$a_t = \begin{cases} \text{random choice from } \{0, 1, 2\}, & \text{with probability } \epsilon \\ \arg\max_{a} Q(s_t, a), & \text{with probability } 1 - \epsilon \end{cases}$$
+$$ 
+\epsilon_t = \max(\epsilon_{\text{min}}, \epsilon_0 \cdot e^{-\lambda t}) 
+$$
+*(where $\lambda$ is the decay rate determined by the target minimum epsilon and total episodes)*
 
-The exploration rate decays exponentially from $\epsilon_0 = 1.0$ to $\epsilon_{\text{min}} = 0.01$ over $N = 50,000$ episodes:
+### 2. Reward Shaping
+To guide the agent, a completion bonus is injected when the agent reaches the terminal flag.
 
-$$\text{decay\_rate} = \left( \frac{\epsilon_{\text{min}}}{\epsilon_0} \right)^{\frac{1}{N}} = (0.01)^{\frac{1}{50000}} \approx 0.9999079$$
+$$ 
+R_t = 
+\begin{cases} 
++100 & \text{if } x \geq 0.5 \text{ (Goal reached)} \\ 
+-1 & \text{otherwise (Step cost)} 
+\end{cases} 
+$$
 
-$$\epsilon_{t+1} = \max\left( \epsilon_{\text{min}}, \epsilon_t \cdot \text{decay\_rate} \right)$$
+### 3. 1-Step Online TD Update
+Standard step-by-step Q-learning update applied during the episode trajectory.
 
-### Reward Shaping
+$$ 
+Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha \left[ R_{t+1} + \gamma \max_{a} Q(s_{t+1}, a) - Q(s_t, a_t) \right] 
+$$
 
-To resolve sparse reward feedback in Mountain Car, a terminal reward bonus ($R_{\text{complete}} = +100$) is added when the target state $x \ge 0.5$ is achieved:
+### 4. Post-Episode MC Correction Phase
+After the episode terminates, the trajectory is traversed backward to compute actual returns.
 
-$$R_{\text{shaped}} = \begin{cases} +100, & \text{if } x \ge 0.5 \text{ and episode terminal} \\ -1, & \text{otherwise} \end{cases}$$
+**Return Calculation:**
+$$ G_t = R_{t+1} + \gamma G_{t+1} $$
+
+**Empirical Return Average:**
+$$ 
+V_{\text{MC}}(s, a) = \frac{\text{returns sum}(s, a)}{\text{returns count}(s, a)} 
+$$
+
+**Blended Q-Value Update:**
+The empirical MC return is blended back into the Q-table using the learning rate $\alpha$.
+
+$$ 
+Q(s, a) \leftarrow (1 - \alpha) \cdot Q(s, a) + \alpha \cdot V_{\text{MC}}(s, a) 
+$$
 
 ---
 
-### Step-Wise Temporal Difference (TD) Update
+## 5. EXECUTION FLOW & PROCESS
 
-At each environment step $t$, the agent applies standard 1-step Q-learning:
-
-$$Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha \left[ R_{\text{shaped}} + \gamma \max_{a'} Q(s_{t+1}, a') - Q(s_t, a_t) \right]$$
-
-If the step terminates directly at the goal ($x \ge 0.5$), the terminal state-action value is explicitly set to the completion reward:
-
-$$Q(s_t, a_t) \leftarrow R_{\text{complete}}$$
-
----
-
-### Post-Episode Monte Carlo (MC) Correction Phase
-
-At the end of every episode, the trajectory history $[(s_0, a_0, r_1), (s_1, a_1, r_2), \dots, (s_{T-1}, a_{T-1}, r_T)]$ is iterated in reverse to compute empirical returns $G_t$:
-
-$$G_t = r_{t+1} + \gamma G_{t+1}$$
-
-For every visited state-action pair $(s_t, a_t)$, cumulative returns and visit counts are maintained:
-
-$$\text{returns\_sum}(s_t, a_t) \leftarrow \text{returns\_sum}(s_t, a_t) + G_t$$
-
-$$\text{returns\_count}(s_t, a_t) \leftarrow \text{returns\_count}(s_t, a_t) + 1$$
-
-The empirical mean Monte Carlo value $\bar{G}(s_t, a_t)$ is computed:
-
-$$\bar{G}(s_t, a_t) = \frac{\text{returns\_sum}(s_t, a_t)}{\text{returns\_count}(s_t, a_t)}$$
-
-Finally, the existing $Q$-value is blended with the empirical Monte Carlo return:
-
-$$Q(s_t, a_t) \leftarrow (1 - \alpha) Q(s_t, a_t) + \alpha \bar{G}(s_t, a_t)$$
-
----
-
-## 4. End-to-End Execution Flow
-
-```
-+-------------------------------------------------------------------+
-|                        Start Episode                              |
-|   Reset Gym Env -> Get continuous observation (x, v)              |
-|   Discretize -> s_0 = (pos_idx, vel_idx)                          |
-+-------------------------------------------------------------------+
-                                  |
-                                  v
-+-------------------------------------------------------------------+
-|                      Step-Wise Loop (TD Phase)                    |
-| 1. Select action via Epsilon-Greedy policy                        |
-| 2. Step environment -> get next (x', v'), base reward, done       |
-| 3. Discretize next observation -> s_{t+1}                         |
-| 4. Compute shaped reward (+100 if reached x >= 0.5)               |
-| 5. Update Q-table immediately using TD target formulation         |
-| 6. Append (s_t, a_t, reward) to trajectory log                    |
-+-------------------------------------------------------------------+
-                                  |
-                   (Episode Ends / Goal Reached)
-                                  v
-+-------------------------------------------------------------------+
-|                   Post-Episode Loop (MC Phase)                    |
-| 1. Traverse trajectory backwards: compute Return G_t              |
-| 2. Accumulate G_t and increment visit count for (s_t, a_t)        |
-| 3. Compute empirical mean MC return V_MC = sum / count            |
-| 4. Blend: Q(s_t, a_t) = (1 - alpha) * Q(s_t, a_t) + alpha * V_MC   |
-+-------------------------------------------------------------------+
-                                  |
-                                  v
-+-------------------------------------------------------------------+
-|                     Update Hyperparameters                        |
-| Decay Epsilon: epsilon = max(min_epsilon, epsilon * decay_rate)   |
-+-------------------------------------------------------------------+
-
+```text
++-------------------------------------------------------------+
+| 1. Episode Initialization                                   |
+|    - Reset env & discretize initial observation (x, v)      |
++-----------------------------+-------------------------------+
+                              |
+                              v
++-------------------------------------------------------------+
+| 2. Online TD Step Loop                                      |
+|    - Select action via Epsilon-Greedy                       |
+|    - Step env, compute shaped reward                        |
+|    - Apply 1-step TD update                                 |
+|    - Log trajectory step: (state, action, reward)           |
++-----------------------------+-------------------------------+
+                              |
+                              v
++-------------------------------------------------------------+
+| 3. Post-Episode MC Loop                                     |
+|    - Loop backwards over episode trajectory                 |
+|    - Compute return G = R_{t+1} + gamma * G_{t+1}           |
+|    - Update visit counts/sums                               |
+|    - Blend empirical MC return into Q-table                 |
++-----------------------------+-------------------------------+
+                              |
+                              v
++-------------------------------------------------------------+
+| 4. Decay Epsilon & Save Checkpoint                          |
+|    - Exponentially decay epsilon                            |
+|    - Pickle model/logs upon completion                      |
++-------------------------------------------------------------+
 ```
 
 ---
 
-## 5. Agent Parameters Reference
+## 6. CONFIGURATION & RUNNING INSTRUCTIONS
 
-| Parameter | Default Value | Description |
-| --- | --- | --- |
-| `x_bin` | `20` | Number of discrete grid divisions along the position axis |
-| `vel_bin` | `20` | Number of discrete grid divisions along the velocity axis |
-| `learning_rate` ($\alpha$) | `0.1` | Step size multiplier for both TD and MC blended updates |
-| `discount_factor` ($\gamma$) | `0.99` | Future reward discount factor |
-| `epsilon` ($\epsilon$) | `1.0` | Initial exploration rate |
-| `min_epsilon` | `0.01` | Exploration floor limit |
-| `complete_reward` | `100` | Terminal bonus for reaching target position ($x \ge 0.5$) |
-| `TRAIN_EPISODES` | `50,000` | Total training episode count |
+### Hyperparameter Summary Table
 
----
+| Parameter | Value | Description |
+| :--- | :--- | :--- |
+| `x_bin` | 20 | Number of position discretization bins |
+| `vel_bin` | 20 | Number of velocity discretization bins |
+| `learning_rate` ($\alpha$) | 0.1 | Step size for TD and MC blending updates |
+| `discount_factor` ($\gamma$) | 0.99 | Importance of future rewards |
+| `initial_epsilon` ($\epsilon_0$) | 1.0 | Initial exploration rate |
+| `min_epsilon` ($\epsilon_{\text{min}}$) | 0.01 | Minimum exploration rate |
+| `complete_reward` | 100 | Reward shaping bonus for reaching $x \geq 0.5$ |
+| `TRAIN_EPISODES` | 50,000 | Total iterations for the training loop |
 
-## 6. How to Run
+### Setup & Execution Commands
 
-### Installation
+1. **Install Dependencies**:
+   ```bash
+   pip install gymnasium numpy tqdm
+   ```
 
-Ensure all dependent packages are installed:
-
-```bash
-pip install gymnasium numpy tqdm
-
-```
-
-### Training & Evaluation
-
-Execute the primary script:
-
-```bash
-python main.py
-
-```
-
-* **If no trained model exists:** The script trains the `BlendedAgent` over 50,000 episodes, saves the trained agent to `mountaincar_blended_agent_50k.pkl`, and writes reward logs to `blended_rewards_50k.pkl`.
-* **If a trained model exists:** The script loads the pickle file directly and invokes `.solve(render=True)` to render the trained car reaching the goal in human visual mode.
+2. **Run the Project**:
+   ```bash
+   python monte_temporal_combination.py
+   ```
+   *Note on Execution logic*: The script will automatically check for the existence of `mountaincar_blended_agent_50k.pkl`. If found, it will bypass the 50,000-episode training loop and immediately load the model for visual evaluation. If no checkpoint is detected, it will commence the full training loop from scratch.
